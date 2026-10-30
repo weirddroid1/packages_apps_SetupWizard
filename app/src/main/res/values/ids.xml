@@ -1,10 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-     SPDX-FileCopyrightText: 2015 The CyanogenMod Project
+     SPDX-FileCopyrightText: The LineageOS Project
      SPDX-License-Identifier: Apache-2.0
 -->
 <resources>
-    <item name="localepicker_input" type="id" />
-    <item name="lp__increment" type="id" />
-    <item name="lp__decrement" type="id" />
+    <item name="setup_header" type="id" />
+    <item name="setup_description" type="id" />
+    <item name="setup_icon" type="id" />
+    <item name="setup_items" type="id" />
 </resources>

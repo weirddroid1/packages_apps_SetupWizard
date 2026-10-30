@@ -11,40 +11,32 @@ import android.os.Bundle
 import android.os.Process
 import android.os.UserManager
 import android.provider.Settings
-import android.view.View
-import android.widget.CheckBox
+import com.google.android.setupdesign.items.SwitchItem
 import org.lineageos.setupwizard.R
 import org.lineageos.setupwizard.base.BaseSetupWizardActivity
 
 class LocationSettingsActivity : BaseSetupWizardActivity() {
 
-    private lateinit var locationAccess: CheckBox
-    private lateinit var locationAgpsAccess: CheckBox
+    private val locationAccess by lazy {
+        itemAdapter.findItemById(R.id.location_item) as SwitchItem
+    }
+    private val locationAgpsAccess by lazy {
+        itemAdapter.findItemById(R.id.location_agps_item) as SwitchItem
+    }
 
-    private lateinit var locationManager: LocationManager
-    private lateinit var userManager: UserManager
+    private val locationManager by lazy { getSystemService(LocationManager::class.java) }
+    private val userManager by lazy { getSystemService(UserManager::class.java) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setNextText(R.string.next)
+        setDescriptionText(getString(R.string.location_summary))
 
-        locationAccess = findViewById(R.id.location_checkbox)
-        locationAgpsAccess = findViewById(R.id.location_agps_checkbox)
-        locationManager = getSystemService(LocationManager::class.java)
-        userManager = getSystemService(UserManager::class.java)
+        locationAgpsAccess.isVisible = userManager.isMainUser
 
-        val locationAccessView = findViewById<View>(R.id.location)
-        locationAccessView.setOnClickListener {
-            locationAccess.isChecked = !locationAccess.isChecked
-        }
-
-        val locationAgpsAccessView = findViewById<View>(R.id.location_agps)
-        if (userManager.isMainUser) {
-            locationAgpsAccessView.setOnClickListener {
-                locationAgpsAccess.isChecked = !locationAgpsAccess.isChecked
+        itemAdapter.setOnItemSelectedListener { item ->
+            if (item is SwitchItem) {
+                item.isChecked = !item.isChecked
             }
-        } else {
-            locationAgpsAccessView.visibility = View.GONE
         }
     }
 

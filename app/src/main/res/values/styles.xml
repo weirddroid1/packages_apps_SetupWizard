@@ -5,34 +5,18 @@
      SPDX-License-Identifier: Apache-2.0
 -->
 <resources>
-    <style name="Theme.Setup" parent="@style/SudFullDynamicColorThemeGlifV3.DayNight">
+
+    <style name="Theme.Setup" parent="@style/SudThemeGlifExpressive.DayNight">
         <item name="sucUsePartnerResource">true</item>
         <item name="sudUsePartnerHeavyTheme">true</item>
     </style>
 
+    <!-- TV -->
+    <style name="Theme.Setup.Tv" />
+
     <style name="SpinnerItem">
         <item name="android:textSize">15sp</item>
         <item name="android:paddingLeft">@dimen/content_margin_left</item>
-    </style>
-
-    <style name="LocaleWidget">
-        <item name="android:textAppearance">?android:attr/textAppearance</item>
-    </style>
-
-    <style name="LocaleWidget.LocalePicker">
-        <item name="android:orientation">vertical</item>
-        <item name="android:fadingEdge">vertical</item>
-        <item name="android:fadingEdgeLength">50dip</item>
-    </style>
-
-    <style name="LocaleWidget.Material.LocalePicker" parent="LocaleWidget.LocalePicker">
-        <item name="solidColor">@android:color/transparent</item>
-        <item name="selectionDivider">@drawable/divider</item>
-        <item name="selectionDividerHeight">1dip</item>
-        <item name="internalLayout">@layout/locale_picker</item>
-        <item name="internalMinWidth">64dip</item>
-        <item name="internalMaxHeight">180dip</item>
-        <item name="virtualButtonPressedDrawable">@null</item>
     </style>
 
     <style name="NoDisplay" parent="@style/Theme.AppCompat">
@@ -50,6 +34,20 @@
         <item name="android:gravity">start</item>
         <item name="android:paddingBottom">@dimen/welcome_title_padding_bottom</item>
         <item name="android:lineHeight">@dimen/welcome_title_line_height</item>
+    </style>
+
+    <style name="WelcomeIconButton" parent="Widget.Material3.Button.IconButton.Outlined">
+        <item name="android:insetTop">0dp</item>
+        <item name="android:insetBottom">0dp</item>
+        <item name="android:insetLeft">0dp</item>
+        <item name="android:insetRight">0dp</item>
+        <item name="android:padding">0dp</item>
+        <item name="android:gravity">center</item>
+        <item name="android:minWidth">0dp</item>
+        <item name="android:minHeight">0dp</item>
+        <item name="iconGravity">textStart</item>
+        <item name="iconPadding">0dp</item>
+        <item name="cornerRadius">@dimen/welcome_footer_button_radius</item>
     </style>
 
     <style name="EdgeToEdgeWallpaperBackground" parent="Theme.Setup">

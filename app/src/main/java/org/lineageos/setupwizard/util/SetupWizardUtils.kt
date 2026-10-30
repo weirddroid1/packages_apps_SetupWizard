@@ -9,6 +9,7 @@ package org.lineageos.setupwizard.util
 import android.app.StatusBarManager
 import android.app.WallpaperManager
 import android.content.ComponentName
+import android.content.ContentResolver
 import android.content.Context
 import android.content.Context.MODE_PRIVATE
 import android.content.Intent
@@ -31,10 +32,14 @@ import android.telephony.SubscriptionManager
 import android.telephony.TelephonyManager
 import android.telephony.TelephonyManager.PHONE_TYPE_GSM
 import android.util.Log
+import android.view.WindowManagerPolicyConstants.NAV_BAR_MODE_GESTURAL
+import android.view.WindowManagerPolicyConstants.NAV_BAR_MODE_GESTURAL_OVERLAY
 import com.google.android.setupcompat.util.ResultCodes.RESULT_SKIP
 import java.io.File
 import lineageos.hardware.LineageHardwareManager
 import lineageos.providers.LineageSettings
+import org.json.JSONObject
+import org.lineageos.internal.util.DeviceKeysConstants.KEY_MASK_APP_SWITCH
 import org.lineageos.setupwizard.DISABLE_NAV_KEYS
 import org.lineageos.setupwizard.ENABLE_RECOVERY_UPDATE
 import org.lineageos.setupwizard.KEY_SEND_METRICS
@@ -47,6 +52,13 @@ import org.lineageos.setupwizard.base.BaseSetupWizardActivity
 object SetupWizardUtils {
 
     private const val TAG = "SetupWizardUtils"
+
+    private const val OVERLAY_CATEGORY_ACCENT_COLOR = "android.theme.customization.accent_color"
+    private const val OVERLAY_CATEGORY_SYSTEM_PALETTE = "android.theme.customization.system_palette"
+    private const val OVERLAY_COLOR_SOURCE = "android.theme.customization.color_source"
+    private const val OVERLAY_COLOR_INDEX = "android.theme.customization.color_index"
+    private const val COLOR_SOURCE_PRESET = "preset"
+    private const val COLOR_SOURCE_HOME = "home_wallpaper"
 
     private const val GMS_PACKAGE = "com.google.android.gms"
     private const val GMS_SUW_PACKAGE = "com.google.android.setupwizard"
@@ -133,6 +145,60 @@ object SetupWizardUtils {
     fun isPackageInstalled(context: Context, packageName: String): Boolean =
         runCatching { context.packageManager.getPackageInfo(packageName, GET_ACTIVITIES) }.isSuccess
 
+    fun enableGesturalNavigation(context: Context) {
+        if (isManagedProfile(context)) {
+            return
+        }
+        if (!isPackageInstalled(context, NAV_BAR_MODE_GESTURAL_OVERLAY)) {
+            return
+        }
+        val deviceKeys =
+            context.resources.getInteger(
+                org.lineageos.platform.internal.R.integer.config_deviceHardwareKeys
+            )
+        if ((deviceKeys and KEY_MASK_APP_SWITCH) != 0) {
+            return
+        }
+        val navigationMode =
+            Settings.Secure.getInt(context.contentResolver, Settings.Secure.NAVIGATION_MODE, 0)
+        if (navigationMode == NAV_BAR_MODE_GESTURAL) {
+            return
+        }
+        val overlayManager =
+            IOverlayManager.Stub.asInterface(ServiceManager.getService(Context.OVERLAY_SERVICE))
+        runCatching {
+            overlayManager.setEnabledExclusiveInCategory(
+                NAV_BAR_MODE_GESTURAL_OVERLAY,
+                UserHandle.USER_CURRENT,
+            )
+        }
+    }
+
+    private fun restoreWallpaperColorSource(contentResolver: ContentResolver) {
+        val overlayPackages =
+            Settings.Secure.getString(
+                contentResolver,
+                Settings.Secure.THEME_CUSTOMIZATION_OVERLAY_PACKAGES,
+            ) ?: return
+
+        runCatching {
+                val json = JSONObject(overlayPackages)
+                if (json.optString(OVERLAY_COLOR_SOURCE) != COLOR_SOURCE_PRESET) {
+                    return
+                }
+                json.remove(OVERLAY_CATEGORY_SYSTEM_PALETTE)
+                json.remove(OVERLAY_CATEGORY_ACCENT_COLOR)
+                json.remove(OVERLAY_COLOR_INDEX)
+                json.put(OVERLAY_COLOR_SOURCE, COLOR_SOURCE_HOME)
+                Settings.Secure.putString(
+                    contentResolver,
+                    Settings.Secure.THEME_CUSTOMIZATION_OVERLAY_PACKAGES,
+                    json.toString(),
+                )
+            }
+            .onFailure { Log.w(TAG, "Could not restore the wallpaper color source", it) }
+    }
+
     fun finishSetupWizard(context: BaseSetupWizardActivity) {
         if (LOGV) {
             Log.v(TAG, "finishSetupWizard")
@@ -148,6 +214,7 @@ object SetupWizardUtils {
                     "This should not happen!",
             )
         }
+        restoreWallpaperColorSource(contentResolver)
         Settings.Secure.putInt(contentResolver, Settings.Secure.USER_SETUP_COMPLETE, 1)
         if (hasLeanback(context)) {
             Settings.Secure.putInt(contentResolver, Settings.Secure.TV_USER_SETUP_COMPLETE, 1)

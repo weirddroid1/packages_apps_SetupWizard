@@ -12,42 +12,53 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.Bundle
 import android.os.Handler
+import android.os.LocaleList
 import android.os.Looper
 import android.telephony.SubscriptionManager
 import android.telephony.TelephonyManager
 import android.util.Log
-import android.widget.ArrayAdapter
-import android.widget.NumberPicker
+import android.view.View
 import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
+import com.android.internal.app.LocaleHelper
+import com.android.internal.app.LocaleStore
 import com.android.internal.telephony.TelephonyIntents
 import com.android.internal.telephony.util.LocaleUtils
 import com.google.android.setupcompat.util.SystemBarHelper
+import com.google.android.setupdesign.items.Item
+import com.google.android.setupdesign.items.ItemGroup
+import com.google.android.setupdesign.items.RecyclerItemAdapter
+import com.google.android.setupdesign.items.SectionItem
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import org.lineageos.setupwizard.R
 import org.lineageos.setupwizard.SetupWizardApp
 import org.lineageos.setupwizard.base.BaseSetupWizardActivity
-import org.lineageos.setupwizard.widget.LocalePicker
 
-class LocaleActivity : BaseSetupWizardActivity() {
+open class LocaleActivity : BaseSetupWizardActivity() {
 
-    private lateinit var localeAdapter:
-        ArrayAdapter<com.android.internal.app.LocalePicker.LocaleInfo>
-    private lateinit var currentLocale: Locale
-    private lateinit var adapterIndices: IntArray
-    private lateinit var languagePicker: LocalePicker
-    private var fetchUpdateSimLocaleTask: ExecutorService? = null
+    private var parentLanguage: LocaleStore.LocaleInfo? = null
+
+    private val regionsBackCallback =
+        object : OnBackPressedCallback(false) {
+            override fun handleOnBackPressed() {
+                showLanguages()
+            }
+        }
+
     private val handler = Handler(Looper.getMainLooper())
+
+    private val levelLocales = ConcurrentHashMap<String, List<LocaleStore.LocaleInfo>>()
+    private val localeExecutor: ExecutorService by lazy { Executors.newSingleThreadExecutor() }
+    private val fetchSimLocaleExecutor: ExecutorService by lazy {
+        Executors.newSingleThreadExecutor()
+    }
     private var pendingLocaleUpdate = false
     private var paused = true
 
     private val setupWizardApp: SetupWizardApp by lazy { application as SetupWizardApp }
-
-    private val updateLocale = Runnable {
-        languagePicker.isEnabled = false
-        com.android.internal.app.LocalePicker.updateLocale(currentLocale)
-    }
 
     private val simChangedReceiver =
         object : BroadcastReceiver() {
@@ -61,14 +72,11 @@ class LocaleActivity : BaseSetupWizardActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         SystemBarHelper.setBackButtonVisible(window, true)
-        setNextText(R.string.next)
-        languagePicker = findViewById(R.id.locale_list)
-        languagePicker.setNextRight(nextButton.id)
-        languagePicker.requestFocus()
-        if (resources.getBoolean(R.bool.config_isLargeNoTouch)) {
-            languagePicker.setOnClickListener { nextButton.performClick() }
-        }
-        loadLanguages()
+
+        onBackPressedDispatcher.addCallback(this, regionsBackCallback)
+
+        showLanguages()
+        fetchAndUpdateSimLocale()
     }
 
     override fun onPause() {
@@ -84,11 +92,17 @@ class LocaleActivity : BaseSetupWizardActivity() {
             simChangedReceiver,
             IntentFilter(TelephonyIntents.ACTION_SIM_STATE_CHANGED),
         )
-        languagePicker.isEnabled = true
         if (pendingLocaleUpdate) {
             pendingLocaleUpdate = false
             fetchAndUpdateSimLocale()
         }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        handler.removeCallbacksAndMessages(null)
+        fetchSimLocaleExecutor.shutdownNow()
+        localeExecutor.shutdownNow()
     }
 
     override val layoutResId = R.layout.setup_locale
@@ -97,48 +111,118 @@ class LocaleActivity : BaseSetupWizardActivity() {
 
     override val iconResId = R.drawable.ic_locale
 
-    private fun loadLanguages() {
-        localeAdapter =
-            com.android.internal.app.LocalePicker.constructAdapter(
-                this,
-                R.layout.locale_picker_item,
-                R.id.locale,
-            )
-        currentLocale = Locale.getDefault()
-        fetchAndUpdateSimLocale()
-        var currentLocaleIndex = 0
-        val labels =
-            Array(localeAdapter.count) { i ->
-                val info = localeAdapter.getItem(i)!!
-                if (info.locale == currentLocale) {
-                    currentLocaleIndex = i
-                }
-                info.label
-            }
-        adapterIndices = IntArray(localeAdapter.count) { it }
-        languagePicker.setDisplayedValues(labels)
-        languagePicker.maxValue = labels.size - 1
-        languagePicker.value = currentLocaleIndex
-        languagePicker.descendantFocusability = NumberPicker.FOCUS_BLOCK_DESCENDANTS
-        languagePicker.setOnValueChangedListener { _, _, _ -> setLocaleFromPicker() }
-        languagePicker.setOnScrollListener { _, scrollState ->
-            if (scrollState == NumberPicker.OnScrollListener.SCROLL_STATE_TOUCH_SCROLL) {
-                setupWizardApp.ignoreSimLocale = true
-            }
+    override val installFooterBar = false
+
+    private fun showLanguages() {
+        parentLanguage = null
+        regionsBackCallback.isEnabled = false
+        showLevel(parent = null, countryMode = false)
+    }
+
+    private fun showRegions(language: LocaleStore.LocaleInfo) {
+        parentLanguage = language
+        regionsBackCallback.isEnabled = true
+        showLevel(parent = language, countryMode = true)
+    }
+
+    private fun showLevel(parent: LocaleStore.LocaleInfo?, countryMode: Boolean) {
+        onLevelLocales(parent, countryMode) { locales, expandable ->
+            show(locales, countryMode, expandable)
         }
     }
 
-    private fun setLocaleFromPicker() {
-        setupWizardApp.ignoreSimLocale = true
-        val i = adapterIndices[languagePicker.value]
-        localeAdapter.getItem(i)?.let { onLocaleChanged(it.locale) }
+    private fun onLevelLocales(
+        parent: LocaleStore.LocaleInfo?,
+        countryMode: Boolean,
+        onReady: (List<LocaleStore.LocaleInfo>, expandable: Set<String>) -> Unit,
+    ) {
+        localeExecutor.execute {
+            val locales = levelLocales(parent)
+            locales.forEach { if (countryMode) it.fullCountryNameNative else it.fullNameNative }
+            val expandable =
+                if (countryMode) {
+                    emptySet()
+                } else {
+                    locales.filter { levelLocales(it).size > 1 }.map { it.id }.toSet()
+                }
+            handler.post { if (!isDestroyed) onReady(locales, expandable) }
+        }
     }
 
-    private fun onLocaleChanged(paramLocale: Locale) {
-        languagePicker.isEnabled = true
-        handler.removeCallbacks(updateLocale)
-        currentLocale = paramLocale
-        handler.postDelayed(updateLocale, 1000)
+    private fun levelLocales(parent: LocaleStore.LocaleInfo?): List<LocaleStore.LocaleInfo> =
+        levelLocales.getOrPut(parent?.id.orEmpty()) {
+            LocaleStore.getLevelLocales(this, emptySet(), parent, /* translatedOnly= */ true)
+                .filterNot { LocaleList.isPseudoLocale(it.locale) }
+                .sortedWith(LocaleHelper.LocaleInfoComparator(Locale.getDefault(), parent != null))
+        }
+
+    private fun show(
+        locales: List<LocaleStore.LocaleInfo>,
+        countryMode: Boolean,
+        expandable: Set<String>,
+    ) {
+        val (suggested, remaining) = locales.partition { it.isSuggested }
+
+        val root = ItemGroup()
+        suggested.forEach { root.addChild(localeItem(it, countryMode, it.id in expandable)) }
+
+        if (remaining.isNotEmpty()) {
+            val section = SectionItem()
+            remaining.forEach { section.addChild(localeItem(it, countryMode, it.id in expandable)) }
+            if (suggested.isNotEmpty() && separatesSuggestedLocales) {
+                section.setHeaderTitle("")
+            }
+            root.addChild(section)
+        }
+
+        val adapter = RecyclerItemAdapter(root)
+        adapter.setOnItemSelectedListener { item ->
+            (item as? LocaleItem)?.let { onItemSelected(it) }
+        }
+        itemAdapter = adapter
+        scrollItemsToTop()
+    }
+
+    protected open val localeItemLayoutResId = 0
+
+    protected open val separatesSuggestedLocales = true
+
+    private fun localeItem(
+        localeInfo: LocaleStore.LocaleInfo,
+        countryMode: Boolean,
+        expandable: Boolean,
+    ) =
+        LocaleItem(localeInfo, expandable).apply {
+            if (localeItemLayoutResId != 0) {
+                layoutResource = localeItemLayoutResId
+            }
+            title =
+                if (countryMode) {
+                    localeInfo.fullCountryNameNative
+                } else {
+                    localeInfo.fullNameNative
+                }
+        }
+
+    private fun onItemSelected(item: LocaleItem) {
+        val localeInfo = item.localeInfo
+        if (parentLanguage != null) {
+            selectLocale(localeInfo)
+            return
+        }
+        onLevelLocales(localeInfo, countryMode = true) { regions, _ ->
+            if (regions.size > 1) showRegions(localeInfo) else selectLocale(localeInfo)
+        }
+    }
+
+    private fun selectLocale(localeInfo: LocaleStore.LocaleInfo) {
+        setupWizardApp.ignoreSimLocale = true
+        applyLocale(localeInfo.locale)
+    }
+
+    private fun applyLocale(locale: Locale) {
+        com.android.internal.app.LocalePicker.updateLocale(locale)
+        nextAction(RESULT_OK)
     }
 
     private fun fetchAndUpdateSimLocale() {
@@ -149,65 +233,66 @@ class LocaleActivity : BaseSetupWizardActivity() {
             pendingLocaleUpdate = true
             return
         }
-        fetchUpdateSimLocaleTask?.shutdown()
-        val executor = Executors.newSingleThreadExecutor()
-        fetchUpdateSimLocaleTask = executor
-        executor.execute {
-            var locale: Locale? = null
-            if (!isFinishing || !isDestroyed) {
-                // If the sim is currently pin locked, return
-                val telephonyManager =
-                    getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
-                val state = telephonyManager.simState
+        fetchSimLocaleExecutor.execute {
+            val locale = simLocale() ?: return@execute
+            handler.post {
                 if (
-                    state == TelephonyManager.SIM_STATE_PIN_REQUIRED ||
-                        state == TelephonyManager.SIM_STATE_PUK_REQUIRED
+                    locale == Locale.getDefault() || setupWizardApp.ignoreSimLocale || isDestroyed
                 ) {
-                    return@execute
+                    return@post
                 }
-
-                val subscriptionManager = getSystemService(SubscriptionManager::class.java)
-                val activeSubs = subscriptionManager.activeSubscriptionInfoList
-                if (activeSubs == null || activeSubs.isEmpty()) {
-                    return@execute
-                }
-
-                // Fetch locale for active sim's MCC
-                val mccString = activeSubs[0].mccString
-                if (!mccString.isNullOrEmpty()) {
-                    runCatching { mccString.toInt() }
-                        .onSuccess { mcc ->
-                            locale =
-                                LocaleUtils.getLocaleFromMccMnc(
-                                    this@LocaleActivity,
-                                    mcc,
-                                    null,
-                                    null,
-                                )
-                        }
-                        .onFailure { e -> Log.w(TAG, "mccString not a number: '$mccString'", e) }
-                } else {
-                    Log.w(TAG, "Unexpected mccString: '$mccString'")
-                }
-
-                // If that fails, fall back to preferred languages reported by the sim
-                if (locale == null) {
-                    locale = telephonyManager.simLocale
-                }
-
-                val finalLocale = locale
-                handler.post {
-                    if (finalLocale != null && finalLocale != currentLocale) {
-                        if (!setupWizardApp.ignoreSimLocale && !isDestroyed) {
-                            val label =
-                                getString(R.string.sim_locale_changed, finalLocale.displayName)
-                            Toast.makeText(this@LocaleActivity, label, Toast.LENGTH_SHORT).show()
-                            onLocaleChanged(finalLocale)
-                            setupWizardApp.ignoreSimLocale = true
-                        }
-                    }
-                }
+                Toast.makeText(
+                        this,
+                        getString(R.string.sim_locale_changed, locale.displayName),
+                        Toast.LENGTH_SHORT,
+                    )
+                    .show()
+                setupWizardApp.ignoreSimLocale = true
+                com.android.internal.app.LocalePicker.updateLocale(locale)
             }
+        }
+    }
+
+    private fun simLocale(): Locale? {
+        if (isFinishing || isDestroyed) {
+            return null
+        }
+        val telephonyManager = getSystemService(TelephonyManager::class.java) ?: return null
+
+        val state = telephonyManager.simState
+        if (
+            state == TelephonyManager.SIM_STATE_PIN_REQUIRED ||
+                state == TelephonyManager.SIM_STATE_PUK_REQUIRED
+        ) {
+            return null
+        }
+
+        val subscriptionManager = getSystemService(SubscriptionManager::class.java)
+        val activeSub =
+            subscriptionManager?.activeSubscriptionInfoList?.firstOrNull() ?: return null
+
+        val mccString = activeSub.mccString
+        val mcc = mccString?.toIntOrNull()
+        if (mcc == null) {
+            Log.w(TAG, "Unexpected mccString: '$mccString'")
+        } else {
+            LocaleUtils.getLocaleFromMccMnc(this, mcc, null, null)?.let {
+                return it
+            }
+        }
+
+        return telephonyManager.simLocale
+    }
+
+    private class LocaleItem(
+        val localeInfo: LocaleStore.LocaleInfo,
+        private val expandable: Boolean,
+    ) : Item() {
+
+        override fun onBindView(view: View) {
+            super.onBindView(view)
+            view.findViewById<View>(R.id.tv_list_item_expand)?.visibility =
+                if (expandable) View.VISIBLE else View.GONE
         }
     }
 

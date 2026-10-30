@@ -18,9 +18,8 @@ class RestoreIntroActivity : SubBaseActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        glifLayout.setDescriptionText(
-            getString(R.string.intro_restore_subtitle, getString(R.string.os_name))
-        )
+        setDescriptionText(getString(R.string.intro_restore_subtitle, getString(R.string.os_name)))
+        setNextText(R.string.intro_restore_button)
     }
 
     override fun onSubactivityResult(activityResult: ActivityResult) {
@@ -46,6 +45,10 @@ class RestoreIntroActivity : SubBaseActivity() {
     override val titleResId = R.string.intro_restore_title
 
     override val iconResId = R.drawable.ic_restore
+
+    override val installFooterBar = true
+
+    override val showSkipButton = true
 
     private fun launchRestore() {
         startSubactivity(Intent(ACTION_RESTORE_FROM_BACKUP))
